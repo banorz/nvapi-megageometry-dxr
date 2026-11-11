@@ -1,0 +1,21 @@
+# Third-party SDKs and the RTXMG demo: downloaded separately (see README, "Dependencies")
+sdk/
+
+# Build outputs and local artifacts
+build/
+*.obj
+*.pdb
+*.lib
+*.exp
+*.exe
+*.dll
+*.asi
+.vs/
+
+# Runtime output: logs, DXIL dumps, captures (a capture contains the game's geometry), crash dumps
+*.log
+*.dxil
+*.ll
+*.bin
+*.dmp
+patched_cluster_shader.dxil
