@@ -19,6 +19,7 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_D
 - **Driver obbligatorio per `Clusters=1` (`ClustersAndPTLASSupported = TRUE`)**:
   - [**AMD Software: Agility SDK Developer Preview Edition 26.20.12.01**](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-MS-AGILITY-SDK-26-20-12-01.html) (`RN-RAD-MS-AGILITY-SDK-26-20-12-01`).
   - Sul driver Adrenalin standard `32.0.32015.7029` (18/10/2026), `CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS_RAYTRACING2)` riporta `ClustersAndPTLASSupported = FALSE` (`Clusters=0`), quindi `ExecuteIndirectRTASOperations` non costruisce i nodi CLAS in VRAM (la scena 3D di `rtxmg_demo.exe` resta vuota). Installando il driver **26.20.12.01**, `ClustersAndPTLASSupported` diventa `TRUE` in hardware sulla RX 9070 XT.
+  - **Adrenalin 26.11.1** (`32.0.32015.16001`, 11/11/2026, primo driver non beta dopo la preview): di nuovo `Clusters=0`. `ID3D12DeviceRaytracing2` esiste e il prebuild info dei CLAS risponde, ma `CreateStateObject` con gli intrinsics SM 6.10 (`clusterID`, `triangleObjectPosition`) restituisce `E_INVALIDARG`: `test_wrapper` 27/28 (verificato il 13/11/2026). Per lavorare serve ancora il driver preview.
 - Per il progetto parallelo `amd-nr` (DLSS 5 Neural Rendering via HIP), sulla macchina è installato ROCm 7.1 (`C:\Program Files\AMD\ROCm\7.1`), mentre online sono disponibili gli aggiornamenti **ROCm / HIP SDK 7.2.x** per Windows con miglioramenti per `gfx1201`.
 
 ## 2. Compilazione Locale
