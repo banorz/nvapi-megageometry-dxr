@@ -1,11 +1,11 @@
-# amd-megageometry
+# nvapi-megageometry-dxr
 
 **An experimental attempt at a wrapper for NVIDIA RTX Mega Geometry on AMD GPUs.**
 
 Games and demos built for NVIDIA RTX Mega Geometry use NVIDIA's proprietary NvAPI cluster
 extensions: cluster acceleration structures (CLAS), cluster templates, cluster BLAS, partitioned
 TLAS, and the `nvHLSLExtns` shader intrinsics. They do not run these paths on other GPUs.
-`amd-megageometry` replaces `nvapi64.dll` and translates those calls, at runtime, to the
+`nvapi-megageometry-dxr` replaces `nvapi64.dll` and translates those calls, at runtime, to the
 vendor-neutral **DirectX Raytracing 1.722 preview** (Clustered Geometry and Partitioned TLAS,
 Shader Model 6.10). The target is AMD Radeon RX 9000 (RDNA 4).
 
