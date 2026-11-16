@@ -53,6 +53,21 @@ HMODULE LoadDxcModule(const wchar_t* dllName) {
     return LoadLibraryW(dllName);
 }
 
+// AMD_MG_TIMER_CONST=1: NvGetSpecial(GLOBAL_TIMER_LO/HI) becomes the constant 0, which crashes
+// amdxc64.dll 32.0.32012.1013 in CreateStateObject on the RTXMG path tracer. Repro only.
+bool TimerConstRequested() {
+    static const bool on = [] {
+        char value[8]{};
+        const DWORD len = GetEnvironmentVariableA("AMD_MG_TIMER_CONST", value, sizeof(value));
+        const bool enabled = len > 0 && len < sizeof(value) && std::atoi(value) != 0;
+        if (enabled) {
+            Log("[DXIL] AMD_MG_TIMER_CONST=1: GLOBAL_TIMER reads become constant 0 (driver crash repro)");
+        }
+        return enabled;
+    }();
+    return on;
+}
+
 } // namespace
 
 bool InitializeDxilPatcher() {
@@ -346,8 +361,14 @@ bool TransformDxilIrText(
                         // NV_SPECIALOP_GLOBAL_TIMER_LO/HI: DXIL has no clock op. The value must NOT be a
                         // constant: amdxc64.dll 32.0.32012.1013 crashes (AV in CreateStateObject) on the
                         // RTXMG raygen "timeview" code once both timer reads fold to a constant.
-                        lines[j] = "  " + outVar + " = call i32 @dx.op.waveGetLaneIndex(i32 111) ; [amd-mg] NvGetSpecial(GLOBAL_TIMER) placeholder";
-                        needWaveLaneIndexDecl = true;
+                        // AMD_MG_TIMER_CONST=1 emits the constant anyway, to reproduce that driver crash
+                        // (scripts\repro_compiler_crash.ps1).
+                        if (TimerConstRequested()) {
+                            lines[j] = "  " + outVar + " = add i32 0, 0 ; [amd-mg] NvGetSpecial(GLOBAL_TIMER) constant (AMD_MG_TIMER_CONST)";
+                        } else {
+                            lines[j] = "  " + outVar + " = call i32 @dx.op.waveGetLaneIndex(i32 111) ; [amd-mg] NvGetSpecial(GLOBAL_TIMER) placeholder";
+                            needWaveLaneIndexDecl = true;
+                        }
                     } else {
                         lines[j] = "  " + outVar + " = add i32 0, 0 ; [amd-mg] unsupported NvGetSpecial sub-op " + subOpText;
                         unsupportedOps.insert("19 (GET_SPECIAL sub-op " + subOpText + ")");

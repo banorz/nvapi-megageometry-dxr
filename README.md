@@ -22,6 +22,7 @@ Entertainment. NVIDIA, RTX, AMD, Radeon and DirectX are trademarks of their resp
 ## Contents
 
 - [Status](#status)
+- [Driver issues and repro scripts](#driver-issues-and-repro-scripts)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
 - [Dependencies](#dependencies)
@@ -67,6 +68,27 @@ is still a preview on both the Microsoft and the AMD side, the project is paused
 driver is available. For that run, the wrapper can capture the real cluster data
 (`AMD_MG_CAPTURE_REAL`), and `replay_capture.exe` can rebuild it outside the game (see
 [Alan Wake 2](#4-alan-wake-2-experimental-crashes)).
+
+---
+
+## Driver issues and repro scripts
+
+Problems found on the *Agility SDK Developer Preview Edition 26.20.12.01* driver
+(`32.0.32012.1013`). Only the clustered geometry part of SM 6.10 and DXR 1.722 was used; LinAlg
+and the other SM 6.10 features were never tested. The scripts in [scripts/](scripts) were
+verified on that driver and have not been re-run on later drivers. Adrenalin 26.11.1 does not
+expose clustered geometry at all (`ClustersAndPTLASSupported = FALSE`).
+
+| Issue | Status | Repro |
+|---|---|---|
+| The shader compiler (`amdxc64.dll`) crashes with an access violation inside `CreateStateObject` when the RTXMG path tracer's raygen reads its GPU timer as a constant (`add i32 0, 0`). The library passes the DXIL validator; with a non-constant value it compiles. Narrowed down to the `RayGen` export plus any closest-hit that uses the ray payload. | Driver bug: reproducible offline, the input is valid DXIL. | [scripts/repro_compiler_crash.ps1](scripts/repro_compiler_crash.ps1). Needs your own copy of RTXMG 2.2.0: the script extracts the library from it, nothing NVIDIA is in this repository. CPU only, no GPU work. |
+| A null address in the explicit destination array of a cluster operation hangs the GPU (`DXGI_ERROR_DEVICE_HUNG`), even when that argument is empty. NVIDIA's NvAPI accepts it. | **Not a driver bug.** In the [DXR spec](https://microsoft.github.io/DirectX-Specs/d3d/Raytracing2.html) an empty argument still produces an empty object, which is written to its destination, and only GET_SIZES mode lets the destination array be NULL; a null destination is undefined behavior. It is a difference between NvAPI and DXR, so the wrapper redirects null destinations to a sink buffer by default. | [scripts/repro_null_dst_hang.ps1](scripts/repro_null_dst_hang.ps1). Causes a TDR. |
+| `BUILD_BLAS_FROM_CLAS` faults on Alan Wake 2's real cluster data. | Probable driver bug, not proven: never reproduced outside the game ([details](#what-is-known-about-the-alan-wake-2-crash)). | Capture and replay, see [Alan Wake 2](#4-alan-wake-2-experimental-crashes). |
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\repro_compiler_crash.ps1 [-RtxmgBin <RTXMG 2.2.0 bin folder>]
+powershell -ExecutionPolicy Bypass -File .\scripts\repro_null_dst_hang.ps1
+```
 
 ---
 
@@ -150,7 +172,7 @@ Outputs in `build\`:
 - `nvapi64.dll`: the wrapper.
 - `dxcompiler.dll`, `dxil.dll`: DXC 1.10, needed next to the wrapper by the DXIL patcher.
 - `D3D12\`: Agility SDK 1.722 (`D3D12Core.dll`, `D3D12StateObjectCompiler.dll`, `d3d12SDKLayers.dll`).
-- Test tools: `test_wrapper.exe`, `repro_templates.exe`, `replay_capture.exe`, `repro_rtpso.exe`, `dxil_asm.exe`.
+- Test tools: `test_wrapper.exe`, `repro_templates.exe`, `replay_capture.exe`, `repro_rtpso.exe`, `dxil_asm.exe`, `patch_dxil.exe` (runs the DXIL patcher on a file).
 
 ---
 
@@ -190,7 +212,11 @@ cd build
 .\repro_rtpso.exe patched_cluster_shader.dxil --only=RayGen,ClusterLodClosestHit   # bisect by export
 ..\sdk\dxc\extracted\bin\x64\dxc.exe -dumpbin patched_cluster_shader.dxil -Fc x.ll   # edit the IR, then:
 .\dxil_asm.exe x.ll x.dxil; .\repro_rtpso.exe x.dxil
+.\patch_dxil.exe original.dxil patched.dxil   # run the wrapper's DXIL patcher on an unpatched library
 ```
+
+[scripts/repro_compiler_crash.ps1](scripts/repro_compiler_crash.ps1) chains these tools for the
+known compiler crash (see [Driver issues](#driver-issues-and-repro-scripts)).
 
 ### 3. NVIDIA RTXMG sample
 
@@ -277,6 +303,8 @@ is in [.agent/agent.md](.agent/agent.md).
 | `AMD_MG_CAPTURE_REAL` | `0` | `N`: captures the real cluster data of the first N BLAS into `amd_megageometry_capture.bin`. |
 | `AMD_MG_SPLIT_BLAS` | `1` | Builds BLAS from CLAS in chunks of N, so that the log can name the BLAS in flight. `0` runs one operation as the game requested. |
 | `AMD_MG_FORCE_CAPS` | `0` | `1`: reports Mega Geometry caps even without `ID3D12DeviceRaytracing2`. |
+| `AMD_MG_SANITIZE_DST` | `1` | `0`: passes null destinations to the driver unchanged (repro of the GPU hang). |
+| `AMD_MG_TIMER_CONST` | `0` | `1`: NvAPI GPU timer reads become the constant 0 (repro of the compiler crash). |
 
 ---
 

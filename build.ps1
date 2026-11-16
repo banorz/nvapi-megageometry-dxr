@@ -46,7 +46,8 @@ $BuildCmd = "`"$VsDevCmd`" -arch=x64 -no_logo && " +
     "cl $ClFlags `"$Root\tests\repro_templates.cpp`" /Fe:`"$BuildDir\repro_templates.exe`" /Fo:`"$BuildDir\\`" d3d12.lib dxgi.lib dxguid.lib && " +
     "cl $ClFlags `"$Root\tests\replay_capture.cpp`" /Fe:`"$BuildDir\replay_capture.exe`" /Fo:`"$BuildDir\\`" d3d12.lib dxgi.lib dxguid.lib && " +
     "cl $ClFlags `"$Root\tests\repro_rtpso.cpp`" /Fe:`"$BuildDir\repro_rtpso.exe`" /Fo:`"$BuildDir\\`" d3d12.lib dxgi.lib dxguid.lib && " +
-    "cl $ClFlags `"$Root\tests\dxil_asm.cpp`" /Fe:`"$BuildDir\dxil_asm.exe`" /Fo:`"$BuildDir\\`""
+    "cl $ClFlags `"$Root\tests\dxil_asm.cpp`" /Fe:`"$BuildDir\dxil_asm.exe`" /Fo:`"$BuildDir\\`" && " +
+    "cl $ClFlags `"$Root\tests\patch_dxil.cpp`" `"$Root\src\dxil_patcher.cpp`" /Fe:`"$BuildDir\patch_dxil.exe`" /Fo:`"$BuildDir\\`""
 
 cmd /c $BuildCmd
 if ($LASTEXITCODE -ne 0) { throw "MSVC compilation failed" }

@@ -26,8 +26,17 @@ amd-megageometry/
 │   └── dllmain.cpp           # Entrypoint DLL e export nvapi_QueryInterface
 ├── shaders/
 │   └── arg_converter.hlsl    # Compute shader (5 entry-point) per conversione argomenti indiretti e ResultSizeArray
+├── scripts/
+│   ├── repro_compiler_crash.ps1 # Crash di amdxc64 in CreateStateObject (timer costante, libreria estratta da RTXMG)
+│   └── repro_null_dst_hang.ps1  # Hang GPU con destinazione nulla (AMD_MG_SANITIZE_DST=0)
 ├── tests/
-│   └── test_wrapper.cpp      # Test suite completa: NvAPI query, struct translation, DXIL patching, GPU converter
+│   ├── test_wrapper.cpp      # Test suite completa: NvAPI query, struct translation, DXIL patching, GPU converter
+│   ├── run_tests.ps1         # Suite in sequenza (test_wrapper, repro sintetici, cattura+replay)
+│   ├── repro_templates.cpp   # Template/istanze/BLAS sintetici tramite il wrapper
+│   ├── replay_capture.cpp    # Replay offline dei dati catturati con AMD_MG_CAPTURE_REAL
+│   ├── repro_rtpso.cpp       # Compila una libreria DXIL in RTPSO fuori dal gioco (SEH sui crash del driver)
+│   ├── dxil_asm.cpp          # .ll -> container DXIL validato e firmato
+│   └── patch_dxil.cpp        # Patcher DXIL del wrapper su un file
 └── build.ps1                 # Script di build automatico (shader + nvapi64.dll + test_wrapper.exe)
 ```
 
@@ -96,7 +105,7 @@ flowchart TD
 
 Sovradimensionare è innocuo; sottodimensionare fa scrivere la GPU oltre i buffer del gioco.
 
-Osservato su RX 9070 XT con driver 32.0.32012.1013 (RTXMG ABeautifulGame):
+Osservato su RX 9070 XT con driver 32.0.32012.1013 (RTXMG ABeautifulGame). Probabilmente legittimo, non un bug: in queste modalità non si scrive nessun oggetto nel buffer risultati e lo scratch può non servire. Per questo è stato tolto dalla tabella "Driver issues" del README.
 - `BUILD_CLAS_FROM_TRIANGLES` in `GET_SIZES` → tutto 0, si usa il limite IMPLICIT.
 - `MOVE_CLUSTER_OBJECT` in `EXPLICIT` → tutto 0 in ogni tentativo, si usa l'euristica.
 
@@ -112,7 +121,7 @@ Osservato su RX 9070 XT con driver 32.0.32012.1013 (RTXMG ABeautifulGame):
 - `build/repro_templates.exe` costruisce e istanzia template tramite il wrapper (`build/nvapi64.dll`) con i parametri di Alan Wake 2, una variabile alla volta: `--fmt=f32|snorm16 --idx=8|16|32 --vstride=N --gpucount --n= --inst= --hint --fasttrace --tri=N --smallsize --idxbase=N --empty=N --emptydst`. Riempie le destinazioni di zone di guardia `0xCD` e riporta i byte scritti davvero rispetto alla dimensione dichiarata dal driver.
 - Risultati su RX 9070 XT, driver 26.20.12.01: formati, stride, conteggio GPU, hint, FAST_TRACE e indici assoluti nella mesh (`--idxbase=49|300`, sia `UINT8` sia `UINT16`) passano tutti senza overflow. Anche la demo RTXMG Barbarian, che usa i template, passa sia con `--cluster-api dxr` sia con `nvapi`.
 - **Causa del crash GPU di Alan Wake 2 (ipotesi confermata in repro):** uno slot con **destinazione nulla** nell'array `destinationAddressArray` (modalità explicit) fa andare in hang la GPU AMD (`0x887A0006`), anche se l'argomento è vuoto (0 triangoli). Con destinazione valida lo slot vuoto è innocuo (`--empty=16` passa, `--empty=16 --emptydst` crasha). NVIDIA evidentemente salta questi slot. AW2 costruisce i template con `count = maxArgCount` (17397, nessun conteggio GPU), quindi gli slot inutilizzati arrivano al driver.
-- **Fix (default attivo, `AMD_MG_SANITIZE_DST=0` lo disattiva):** in modalità explicit il convertitore copia l'array delle destinazioni in uno slot scratch (mode 10 dello shader, stride → 8) sostituendo gli indirizzi nulli con un buffer "sink" da 8 MB nello stato `RAYTRACING_ACCELERATION_STRUCTURE` ([src/gpu_arg_converter.cpp](../src/gpu_arg_converter.cpp), `EnsureNullDstSink`). DXR riceve la copia; l'array del gioco non viene toccato.
+- **Fix (default attivo, `AMD_MG_SANITIZE_DST=0` lo disattiva):** in modalità explicit il convertitore copia l'array delle destinazioni in uno slot scratch (mode 10 dello shader, stride → 8) sostituendo gli indirizzi nulli con un buffer "sink" da 8 MB nello stato `RAYTRACING_ACCELERATION_STRUCTURE` ([src/gpu_arg_converter.cpp](../src/gpu_arg_converter.cpp), `EnsureNullDstSink`). DXR riceve la copia; l'array del gioco non viene toccato. **Non è un bug del driver** (verificato sulla spec [Raytracing2](https://microsoft.github.io/DirectX-Specs/d3d/Raytracing2.html) il 16/11/2026): in DXR un argomento vuoto produce comunque un oggetto vuoto ("`0` just produces an empty CLAS"), che viene scritto nella sua destinazione. L'array delle destinazioni può essere NULL solo in GET_SIZES; solo le voci di `ClasAddressArray` delle BLAS possono essere NULL e vengono ignorate. Il redirect è quindi la traduzione corretta della semantica NvAPI, non un workaround.
 - **Smentito per AW2 (crash 2026-11-06 15:04):** la scansione completa non trova né destinazioni nulle né argomenti vuoti (17397 template, 33618 istanziazioni, 499 BLAS tutti validi). Il redirect resta come protezione. Il page fault non segue lo spostamento dei buffer del gioco tra due crash (buffer del gioco +0x1FC0000, fault +0x21A8000): ipotesi successiva, lettura/scrittura DXR oltre la fine di un buffer del wrapper. Per verificarla il log riporta gli intervalli VA degli slot scratch e del sink (`[Converter] scratch slot`), il DRED indica il buffer del wrapper più vicino al fault, e ogni operazione cluster è racchiusa da marker `amd_mg op#N type=T` visibili come `ctx=` nei breadcrumb.
 - **Crash 2026-11-06 15:16 (marker DRED):** l'operazione in volo è la **prima istanziazione** (type 4, conteggio GPU, 33525 argomenti), subito dopo la costruzione dei 17397 template, completata. Fault `0x8e3176000`: 3,6 GB oltre l'ultimo buffer del wrapper, quindi non è un overflow dei nostri array; tutti i fault finora cadono in `0x8e1..0x8e3` senza allocazione. Le stringhe `ctx=` dei marker non vengono registrate (solo la posizione `SETMARKER`). Restano da provare in repro le caratteristiche di AW2 non ancora coperte: indirizzi distribuiti su più finestre da 4 GB (`--span`, template a hi32 0x3..0x7, CLAS a 0x7f, vertici a 0x7c), indici che collidono col trucco UINT8 (`--idxspread`), `positionTruncateBitCount=8` (`--trunc`), vertex buffer allineati a 4 byte (`--vboff`); `--aw2` le attiva tutte.
 - **`repro_templates --aw2 --n=64 --inst=256` passa (2026-11-06):** nessuna di queste caratteristiche, da sola o insieme, manda in crash il driver. Differenze ancora non coperte dal repro: (1) AW2 **impacchetta** template e CLAS con dimensioni calcolate da sé (dst a distanze variabili 4,6–7,9 KB, non il massimo dichiarato) e interroga `GetClusterOperationRequirementsInfo` con `maxOps=1` per diverse combinazioni prima di costruirli, quindi un'istanza o un template può sovrapporsi a un altro; (2) gli `ib` dei template sono allineati solo a 2 byte (`align>=2^1`); (3) scala (17397 template / 33525 istanze contro 64/256).

@@ -42,7 +42,8 @@ Wrapper C++20 (`nvapi64.dll` proxy + D3D12 hook + DXIL patcher SM 6.10 + GPU arg
   - `AMD_MG_TEMPLATE_NO_HINT=1` — A/B: nel modo 1 (template) azzera il `VertexBuffer` del template (in NvAPI è un suggerimento opzionale; le posizioni vere arrivano dall'istanziazione).
   - `AMD_MG_CAPTURE_REAL=N` — cattura dei dati reali: alla prima operazione BLAS copia sulla GPU (ExecuteIndirect con root SRV/UAV per comando, indirizzi seguiti dai modi 13/14 dello shader) indici e finestre di vertici (istanza e hint) di ogni CLAS delle prime N BLAS (max 8192 CLAS, 160 MB) e scrive `amd_megageometry_capture.bin` accanto alla DLL (al device removal o alla chiusura). Log `[Real]`. Richiede la layout capture (`AMD_MG_DUMP_ARGS`, attiva di default). Replay offline: `build\replay_capture.exe <file> [--only=B] [--nocount]`.
   - `AMD_MG_SPLIT_BLAS=N` — esegue `BUILD_BLAS_FROM_CLAS` a blocchi di N BLAS (default 1, `0` = un'unica operazione come la chiede il gioco). Tiene `maxArgCount × maxClasPerArg` alla dimensione di una sola BLAS e al crash indica la BLAS in volo.
-  - `AMD_MG_SANITIZE_DST=0` — disattiva il fix del crash GPU di Alan Wake 2: di default le destinazioni nulle dell'array explicit vengono redirette su un buffer sink, perché il driver AMD ci scrive comunque e manda in hang la GPU ([architecture.md](architecture.md) "Diagnostica cluster").
+  - `AMD_MG_SANITIZE_DST=0` — disattiva il fix del crash GPU di Alan Wake 2: di default le destinazioni nulle dell'array explicit vengono redirette su un buffer sink, perché il driver AMD ci scrive comunque e manda in hang la GPU (corretto per la spec DXR: un argomento vuoto produce un oggetto vuoto, la destinazione nulla è comportamento indefinito) ([architecture.md](architecture.md) "Diagnostica cluster").
+  - `AMD_MG_TIMER_CONST=1` — solo repro: `NvGetSpecial(GLOBAL_TIMER_LO/HI)` diventa la costante `0` invece del segnaposto `WaveGetLaneIndex()`, il caso che fa crashare `amdxc64.dll` 32.0.32012.1013 in `CreateStateObject` ([translation.md](translation.md) §3). Usata da [scripts/repro_compiler_crash.ps1](../scripts/repro_compiler_crash.ps1).
   - `AMD_MG_STATE_SHADOW=0` — diagnostico: niente hook sulle command list e niente ripristino dello stato compute ([src/cmdlist_state.cpp](../src/cmdlist_state.cpp)).
   - `AMD_MG_FORCE_DXR_CAPS=1` — forza `ClustersAndPTLASSupported = TRUE` in `CheckFeatureSupport(OPTIONS_RAYTRACING2)` se `ID3D12DeviceRaytracing2` esiste.
   - `AMD_MG_DISABLE=1` — A/B senza Mega Geometry. Il gioco vede Cluster Operations e Partitioned TLAS come non supportati: caps NvAPI `NONE`, opcode shader cluster `false`, `OPTIONS_RAYTRACING2.ClustersAndPTLASSupported = FALSE`. Agility 1.722, chaining NvAPI, Streamline e AMD-NR restano attivi. Viene letta dall'ambiente Win32 del processo a ogni query. RTXMG non ha un percorso senza cluster ed esce con `FATAL ERROR: The graphics device does not support Clusters`; il confronto vero si fa in Alan Wake 2 (vedi sotto).
@@ -69,6 +70,12 @@ cd build
 # Bisezione sull'IR: dumpbin -> modifica .ll -> riassembla+valida -> repro
 ..\sdk\dxc\extracted\bin\x64\dxc.exe -dumpbin patched_native_nv.dxil -Fc x.ll
 .\dxil_asm.exe x.ll x.dxil; .\repro_rtpso.exe x.dxil
+.\patch_dxil.exe native_nv.dxil out.dxil          # patcher del wrapper su un file (rispetta AMD_MG_TIMER_CONST)
+cd ..
+
+# Repro pubblicabili dei bug del driver (README "Driver issues and repro scripts"); verificati solo sul preview 26.20.12.01
+powershell -ExecutionPolicy Bypass -File .\scripts\repro_compiler_crash.ps1   # estrae la libreria dalla copia di RTXMG, solo CPU
+powershell -ExecutionPolicy Bypass -File .\scripts\repro_null_dst_hang.ps1    # TDR voluto: chiedere prima all'utente
 
 # Demo RTXMG sul percorso NvAPI (cartella bin della demo)
 .\rtxmg_demo.exe -mf cluster_lod/ABeautifulGame/glTF/ABeautifulGame.gltf --cluster-api nvapi   # oppure dxr; --dlssMode off; --sllog
@@ -78,7 +85,7 @@ cd build
   `rtxmg_demo.exe -mf cluster_lod/ABeautifulGame/glTF/ABeautifulGame.gltf --cluster-api nvapi --dolly-frames 240 -nf 3000 --dump-stats stats_nvapi.json`
 - **Con e senza Mega Geometry (Alan Wake 2):** avvia il gioco con e senza `AMD_MG_DISABLE=1` (variabile di sistema/utente o launcher che la imposta), dallo stesso salvataggio e con lo stesso percorso. Registra 60–90 s con PresentMon o CapFrameX (FPS medi, 1% low, frame time) e annota la VRAM. Nel log verifica `GetRaytracingCaps(CLUSTER_OPERATIONS) -> NONE ... disabled=1`.
 
-`build\native_nv.dxil` / `native_dxr.dxil` sono le librerie path-tracing reali della demo (variante NvAPI e DXR nativa); `test_wrapper.exe` rigenera `build\patched_native_nv.dxil`.
+`build\native_nv.dxil` / `native_dxr.dxil` sono le librerie path-tracing reali della demo (variante NvAPI e DXR nativa): il primo container DXBC (offset `0x32`) di `bin\shaders\rtxmg_demo\dxil\shaders\rtxmg_demo_path_tracer.bin` / `rtxmg_demo_path_tracer_dxr.bin`. Sono codice NVIDIA: mai committarle; `test_wrapper.exe` rigenera `build\patched_native_nv.dxil`.
 
 ## Troubleshooting Flowchart
 
