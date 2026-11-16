@@ -59,7 +59,8 @@ The investigation is documented step by step in [.agent/architecture.md](.agent/
   16-bit indices, address spans, hints, `FAST_TRACE`, GPU counts, split execution, mixed BLAS
   sizes, geometry indices, duplicate cluster IDs, dirty scratch, and the game's BLAS+CLAS
   memory layout.
-- If the game's CLAS are replaced by a single wrapper-built CLAS, all 501 BLAS build.
+- Pointing every BLAS at one CLAS built by the wrapper, instead of the game's own, lets all
+  501 BLAS build without errors.
 - Radeon GPU Detective reports the fault in a driver-internal dispatch, at an address that
   belongs to no resource, with no shader in flight.
 
@@ -81,14 +82,22 @@ expose clustered geometry at all (`ClustersAndPTLASSupported = FALSE`).
 
 | Issue | Status | Repro |
 |---|---|---|
-| The shader compiler (`amdxc64.dll`) crashes with an access violation inside `CreateStateObject` when the RTXMG path tracer's raygen reads its GPU timer as a constant (`add i32 0, 0`). The library passes the DXIL validator; with a non-constant value it compiles. Narrowed down to the `RayGen` export plus any closest-hit that uses the ray payload. | Driver bug: reproducible offline, the input is valid DXIL. | [scripts/repro_compiler_crash.ps1](scripts/repro_compiler_crash.ps1). Needs your own copy of RTXMG 2.2.0: the script extracts the library from it, nothing NVIDIA is in this repository. CPU only, no GPU work. |
-| A null address in the explicit destination array of a cluster operation hangs the GPU (`DXGI_ERROR_DEVICE_HUNG`), even when that argument is empty. NVIDIA's NvAPI accepts it. | **Not a driver bug.** In the [DXR spec](https://microsoft.github.io/DirectX-Specs/d3d/Raytracing2.html) an empty argument still produces an empty object, which is written to its destination, and only GET_SIZES mode lets the destination array be NULL; a null destination is undefined behavior. It is a difference between NvAPI and DXR, so the wrapper redirects null destinations to a sink buffer by default. | [scripts/repro_null_dst_hang.ps1](scripts/repro_null_dst_hang.ps1). Causes a TDR. |
+| Compiling the RTXMG path tracer library crashes `amdxc64.dll` (access violation in `CreateStateObject`) once the wrapper turns the raygen's GPU timer reads into the constant `add i32 0, 0`. The patched library is accepted by the DXIL validator, and a non-constant placeholder compiles fine. Minimal trigger: the `RayGen` export together with a closest-hit shader that reads the ray payload. | Driver bug: valid DXIL, reproducible offline. Low impact: the trigger is unoptimized, hand-patched DXIL that DXC would constant-fold away, so ordinary shaders are unlikely to hit it. | [scripts/repro_compiler_crash.ps1](scripts/repro_compiler_crash.ps1). Needs your own copy of RTXMG 2.2.0: the script extracts the library from it, nothing NVIDIA is in this repository. CPU only, no GPU work. |
+| Cluster operations in explicit mode hang the GPU (`DXGI_ERROR_DEVICE_HUNG`) when an entry of the destination array is 0, including entries whose argument is empty. NvAPI allows such entries. | **Not a driver bug.** Per the [DXR spec](https://microsoft.github.io/DirectX-Specs/d3d/Raytracing2.html), every argument, empty ones included, writes a result to its destination, and a NULL destination array is permitted only for GET_SIZES. A zero entry is therefore undefined behavior. By default the wrapper points such entries at a sink buffer, which is the correct NvAPI→DXR translation. | [scripts/repro_null_dst_hang.ps1](scripts/repro_null_dst_hang.ps1). Causes a TDR. |
 | `BUILD_BLAS_FROM_CLAS` faults on Alan Wake 2's real cluster data. | Probable driver bug, not proven: never reproduced outside the game ([details](#what-is-known-about-the-alan-wake-2-crash)). | Capture and replay, see [Alan Wake 2](#4-alan-wake-2-experimental-crashes). |
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\repro_compiler_crash.ps1 [-RtxmgBin <RTXMG 2.2.0 bin folder>]
 powershell -ExecutionPolicy Bypass -File .\scripts\repro_null_dst_hang.ps1
 ```
+
+**Recovery after a GPU crash.** On this driver a GPU fault usually left the system degraded:
+the desktop became sluggish to the point of being unusable, and new D3D12 devices could fail to
+be created (`D3D12CreateDevice failed`), even for tests that had passed before. Restarting the
+graphics driver (Win+Ctrl+Shift+B) did not help; only a reboot did. Every fault seen in this
+project happened in cluster operations, mostly in Alan Wake 2 and once in the RTXMG sample with an
+early version of the wrapper, so it is unknown whether any GPU fault on the preview driver
+behaves the same way. The cause was not investigated.
 
 ---
 
